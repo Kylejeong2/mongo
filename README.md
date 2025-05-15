@@ -9,7 +9,7 @@ A web scraping project that uses Stagehand to extract structured data from e-com
 - **MongoDB Storage**: Stores scraped data in MongoDB for persistence and querying
 - **Schema Validation**: Uses Zod for schema validation and TypeScript interfaces
 - **Error Handling**: Robust error handling to prevent crashes during scraping
-- **Data Analysis**: Example MongoDB queries for data analysis
+- **Data Analysis**: Built-in MongoDB queries for data analysis
 
 ## Prerequisites
 
@@ -54,29 +54,23 @@ A web scraping project that uses Stagehand to extract structured data from e-com
    - Extract detailed information for the first 3 products
    - Extract reviews for each product
    - Store all data in MongoDB
-   - Run sample queries to demonstrate MongoDB functionality
-
-4. Run additional queries on the collected data:
-   ```
-   npm run query
-   ```
-   
-   This will analyze the data with these reports:
-   - Collection counts
-   - Products by category
-   - Price range analysis (min, max, average)
-   - Top-rated products
-   - Products with the most reviews
+   - Run analysis queries on the collected data showing:
+     - Collection counts
+     - Products by category
+     - Top-rated products
 
 ## Project Structure
 
-- `index.ts`: Main entry point and scraping workflow
-- `scraper.ts`: Scraping functions for products and reviews
-- `mongodb.ts`: MongoDB connection and data access functions
-- `schemas.ts`: Zod schemas and TypeScript types
-- `utils.js`: Utility functions for Stagehand
+The project has a simple structure with a single file containing all functionality:
+
+- `index.ts`: Contains the complete implementation including:
+  - MongoDB connection and data operations
+  - Schema definitions
+  - Scraping functions
+  - Data analysis
+  - Main execution logic
 - `stagehand.config.js`: Stagehand configuration
-- `query.ts`: Data analysis and reporting queries
+- `.env.example`: Example environment variables
 
 ## Data Models
 
@@ -93,15 +87,6 @@ Data is stored in the following MongoDB collections:
 - **products**: Individual product information
 - **product_lists**: Lists of products from category pages
 - **reviews**: Product reviews
-
-## Example Queries
-
-The project includes example MongoDB queries:
-
-- Count products by category
-- Find highest-rated products (4+ stars)
-- Price range analysis
-- Products with the most reviews
 
 ## License
 
