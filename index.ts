@@ -3,7 +3,8 @@ import StagehandConfig from "./stagehand.config.js";
 import chalk from "chalk";
 import boxen from "boxen";
 import { z } from "zod";
-import { MongoClient, Db } from 'mongodb';
+import { MongoServerError } from "mongodb";
+import { MongoClient, Db, Document } from 'mongodb';
 
 /**
  * 🤘 Welcome to Stagehand! Thanks so much for trying us out!
@@ -31,72 +32,176 @@ let db: Db | null = null;
 // ========== Schema Definitions ==========
 // Product schema for e-commerce websites
 const ProductSchema = z.object({
-  id: z.string().optional(),
+  url: z.string(),
+  dateScraped: z.date(),
   name: z.string(),
   price: z.string(),
-  currency: z.string().optional(),
-  description: z.string().optional(),
-  category: z.string().optional(),
-  imageUrl: z.string().optional(),
-  url: z.string(),
-  brand: z.string().optional(),
   rating: z.number().optional(),
+  category: z.string().optional(),
+  id: z.string().optional(),
+  currency: z.string().optional(),
+  imageUrl: z.string().optional(),
   reviewCount: z.number().optional(),
-  inStock: z.boolean().optional(),
-  specs: z.record(z.string()).optional(),
-  dateScraped: z.date(),
-});
-
-type Product = z.infer<typeof ProductSchema>;
+  description: z.string().optional(),
+  specs: z.record(z.any()).optional()
+}) satisfies z.ZodType<Document>;
 
 // Product list schema for results from category pages
 const ProductListSchema = z.object({
   products: z.array(ProductSchema),
   category: z.string().optional(),
-  page: z.number().optional(),
-  totalProducts: z.number().optional(),
-  websiteName: z.string(),
   dateScraped: z.date(),
-});
-
-type ProductList = z.infer<typeof ProductListSchema>;
+  totalProducts: z.number().optional(),
+  page: z.number().optional(),
+  websiteName: z.string().optional()
+}) satisfies z.ZodType<Document>;
 
 // Review schema for product reviews
 const ReviewSchema = z.object({
   id: z.string().optional(),
   productId: z.string(),
-  author: z.string().optional(),
-  rating: z.number(),
-  title: z.string().optional(),
-  content: z.string(),
   date: z.date().optional(),
-  verified: z.boolean().optional(),
-  helpful: z.number().optional(),
   dateScraped: z.date(),
-});
+  verified: z.boolean(),
+  rating: z.number(),
+  content: z.string(),
+  title: z.string().optional(),
+  author: z.string().optional(),
+  helpful: z.number().optional()
+}) satisfies z.ZodType<Document>;
 
-type Review = z.infer<typeof ReviewSchema>;
+// Types are inferred from the schemas
+export type Product = z.infer<typeof ProductSchema>;
+export type ProductList = z.infer<typeof ProductListSchema>;
+export type Review = z.infer<typeof ReviewSchema>;
 
 // Collection names for MongoDB
 const COLLECTIONS = {
   PRODUCTS: 'products',
   PRODUCT_LISTS: 'product_lists',
-  REVIEWS: 'reviews',
-};
+  REVIEWS: 'reviews'
+} as const;
+
+// Index definitions for MongoDB collections
+interface IndexDefinition {
+  key: { [key: string]: number };
+  name: string;
+  unique?: boolean;
+}
+
+const INDEXES = {
+  [COLLECTIONS.PRODUCTS]: [
+    { key: { rating: 1 }, name: 'rating_idx' } as IndexDefinition,
+    { key: { category: 1 }, name: 'category_idx' } as IndexDefinition,
+    { key: { url: 1 }, name: 'url_idx', unique: true } as IndexDefinition,
+    { key: { dateScraped: -1 }, name: 'dateScraped_idx' } as IndexDefinition
+  ],
+  [COLLECTIONS.PRODUCT_LISTS]: [
+    { key: { category: 1 }, name: 'category_idx' } as IndexDefinition,
+    { key: { dateScraped: -1 }, name: 'dateScraped_idx' } as IndexDefinition
+  ],
+  [COLLECTIONS.REVIEWS]: [
+    { key: { productId: 1 }, name: 'productId_idx' } as IndexDefinition,
+    { key: { dateScraped: -1 }, name: 'dateScraped_idx' } as IndexDefinition
+  ]
+} as const;
+
+// Check and create indexes for all collections
+async function createIndexes(db: Db): Promise<void> {
+  console.log(chalk.blue('⚙️ Starting index creation...'));
+  
+  // First create all collections if they don't exist
+  for (const collectionName of Object.keys(INDEXES)) {
+    try {
+      await db.createCollection(collectionName);
+      console.log(chalk.green(`✅ Created collection: ${collectionName}`));
+    } catch (error) {
+      if (error instanceof MongoServerError && error.code === 48) {
+        console.log(chalk.yellow(`⚠️ Collection ${collectionName} already exists`));
+      } else {
+        console.error(chalk.red(`❌ Error creating collection ${collectionName}:`), error);
+        throw error;
+      }
+    }
+  }
+
+  // Now create indexes for each collection
+  for (const [collectionName, indexes] of Object.entries(INDEXES)) {
+    console.log(chalk.blue(`⚙️ Processing indexes for collection: ${collectionName}`));
+    const collection = db.collection(collectionName);
+    
+    for (const index of indexes) {
+      try {
+        console.log(chalk.blue(`⚙️ Creating index ${index.name} on ${collectionName} with keys:`, index.key));
+        const existingIndexes = await collection.listIndexes().toArray();
+        const indexExists = existingIndexes.some(idx => idx.name === index.name);
+        
+        if (indexExists) {
+          console.log(chalk.yellow(`⚠️ Index ${index.name} already exists on ${collectionName}`));
+        } else {
+          await collection.createIndex(index.key, {
+            name: index.name,
+            unique: index.unique || false,
+            background: false
+          });
+          console.log(chalk.green(`✅ Created index ${index.name} on ${collectionName}`));
+        }
+      } catch (error) {
+        console.error(chalk.red(`❌ Error creating index ${index.name} on ${collectionName}:`), error);
+      }
+    }
+  }
+  
+  // Verify indexes were created
+  for (const [collectionName, indexes] of Object.entries(INDEXES)) {
+    const collection = db.collection(collectionName);
+    const existingIndexes = await collection.listIndexes().toArray();
+    console.log(chalk.blue(`Indexes for ${collectionName}:`));
+    console.log(existingIndexes);
+  }
+  
+  console.log(chalk.green('✅ Index creation completed'));
+}
 
 // ========== MongoDB Utility Functions ==========
 /**
  * Connects to MongoDB
  */
 async function connectToMongo(): Promise<Db> {
-  if (db) return db;
-  
+  if (client) {
+    console.log('Using existing MongoDB connection');
+    return client.db(DB_NAME);
+  }
+
   try {
+    console.log('Connecting to MongoDB...');
     client = new MongoClient(MONGO_URI);
     await client.connect();
+    
     console.log('Connected to MongoDB');
     
-    db = client.db(DB_NAME);
+    // Verify if database exists
+    const adminDb = client.db('admin');
+    const databases = await adminDb.admin().listDatabases();
+    const dbExists = databases.databases?.some((db: { name: string }) => db.name === DB_NAME) ?? false;
+    
+    if (!dbExists) {
+      console.log(chalk.blue(`⚙️ Creating database: ${DB_NAME}`));
+      // Create a collection to trigger database creation
+      const db = client.db(DB_NAME);
+      await db.createCollection(COLLECTIONS.PRODUCTS);
+      console.log(chalk.green(`✅ Database ${DB_NAME} created successfully`));
+    } else {
+      console.log(chalk.yellow(`⚠️ Database ${DB_NAME} already exists`));
+    }
+    
+    const db = client.db(DB_NAME);
+    
+    // Create indexes for all collections
+    console.log('Creating indexes...');
+    await createIndexes(db);
+    console.log('Indexes created successfully');
+    
     return db;
   } catch (error) {
     console.error('Error connecting to MongoDB:', error);
@@ -119,22 +224,33 @@ async function closeMongo(): Promise<void> {
 /**
  * Stores data in a MongoDB collection
  */
-async function storeData<T>(collectionName: string, data: T | T[]): Promise<void> {
-  const database = await connectToMongo();
-  const collection = database.collection(collectionName);
+async function storeData<T extends Document>(collectionName: string, data: T | T[]): Promise<void> {
+  const db = await connectToMongo();
+  
+  // Ensure collection exists
+  try {
+    await db.createCollection(collectionName);
+    console.log(chalk.green(`✅ Created collection: ${collectionName}`));
+  } catch (error) {
+    if (error instanceof MongoServerError && error.code === 48) {
+      console.log(chalk.yellow(`⚠️ Collection ${collectionName} already exists`));
+    } else {
+      console.error(chalk.red(`❌ Error creating collection ${collectionName}:`), error);
+      throw error;
+    }
+  }
+  
+  const collection = db.collection(collectionName);
   
   try {
     if (Array.isArray(data)) {
-      if (data.length > 0) {
-        await collection.insertMany(data as any[]);
-        console.log(`Inserted ${data.length} documents into ${collectionName}`);
-      }
+      await collection.insertMany(data as Document[]);
     } else {
-      await collection.insertOne(data as any);
-      console.log(`Inserted 1 document into ${collectionName}`);
+      await collection.insertOne(data as Document);
     }
+    console.log(chalk.green(`✅ Stored data in ${collectionName}`));
   } catch (error) {
-    console.error(`Error storing data in ${collectionName}:`, error);
+    console.error(chalk.red(`❌ Error storing data in ${collectionName}:`), error);
     throw error;
   }
 }
@@ -179,9 +295,15 @@ async function aggregateData<T>(
  * Scrapes a product list from an Amazon category page
  */
 async function scrapeProductList(page: Page, categoryUrl: string): Promise<ProductList> {
+  // Navigate to Amazon homepage first
+  await page.goto('https://www.amazon.com');
+  await page.waitForTimeout(2000);
+  
+  // Then navigate to the category page
   await page.goto(categoryUrl);
   
-  // Wait for the page to load
+  // Wait for products to load
+  await page.waitForSelector('[data-component-type="s-search-result"]', { timeout: 10000 });
   await page.waitForTimeout(2000);
 
   // Scroll to load more products
@@ -219,12 +341,11 @@ async function scrapeProductList(page: Page, categoryUrl: string): Promise<Produ
 
   // Create the product list object
   const productList: ProductList = {
-    products,
+    products: products,
     category: data.category,
-    page: 1,
-    totalProducts: data.totalProducts,
-    websiteName: "Amazon",
     dateScraped: new Date(),
+    totalProducts: products.length,
+    websiteName: "Amazon"
   };
 
   // Store the data in MongoDB
@@ -332,10 +453,11 @@ async function runQueries(): Promise<void> {
       count: number;
     }
 
-    // 1. Get total counts for each collection
+    // 1. Get total counts for each collection using MongoDB's native countDocuments
     console.log(chalk.yellow("\n📊 Collection Counts:"));
+    if (!db) throw new Error('MongoDB connection not established');
     for (const [name, collection] of Object.entries(COLLECTIONS)) {
-      const count = (await findData(collection)).length;
+      const count = await db.collection(collection).countDocuments();
       console.log(`${chalk.green(name)}: ${count} documents`);
     }
 
@@ -358,13 +480,17 @@ async function runQueries(): Promise<void> {
 
     // 3. Find highest rated products
     console.log(chalk.yellow("\n📊 Top Rated Products:"));
-    const highestRatedProducts = await findData(
-      COLLECTIONS.PRODUCTS,
-      { rating: { $gte: 4 } }
-    );
-    
-    console.log(chalk.yellow(`Found ${highestRatedProducts.length} highly rated products (4+ stars)`));
-    if (highestRatedProducts.length > 0) {
+    // First get the count of highly rated products
+    if (!db) throw new Error('MongoDB connection not established');
+    const count = await db.collection(COLLECTIONS.PRODUCTS).countDocuments({ rating: { $gte: 4 } });
+    console.log(chalk.yellow(`Found ${count} highly rated products (4+ stars)`));
+
+    // Only fetch and display the products if there are any
+    if (count > 0) {
+      const highestRatedProducts = await findData(
+        COLLECTIONS.PRODUCTS,
+        { rating: { $gte: 4 } }
+      );
       console.table(
         highestRatedProducts.map((product: any) => ({
           Name: product.name,
@@ -393,7 +519,16 @@ async function main({
 }) {
   try {
     // Connect to MongoDB
-    await connectToMongo();
+    const db = await connectToMongo();
+    
+    // Verify indexes were created
+    console.log(chalk.blue('Verifying indexes...'));
+    for (const [collectionName, indexes] of Object.entries(INDEXES)) {
+      const collection = db.collection(collectionName);
+      const existingIndexes = await collection.listIndexes().toArray();
+      console.log(chalk.blue(`Indexes for ${collectionName}:`));
+      console.log(existingIndexes);
+    }
     
     // Define the category URL for Amazon electronics
     const categoryUrl = "https://www.amazon.com/s?k=laptops";
