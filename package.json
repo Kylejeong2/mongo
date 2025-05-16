@@ -4,7 +4,6 @@
   "scripts": {
     "build": "tsc",
     "start": "tsx index.ts",
-    "query": "tsx query.ts",
     "postinstall": "playwright install"
   },
   "dependencies": {
