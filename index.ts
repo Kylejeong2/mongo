@@ -56,30 +56,14 @@ const ProductListSchema = z.object({
   websiteName: z.string().optional()
 }) satisfies z.ZodType<Document>;
 
-// Review schema for product reviews
-const ReviewSchema = z.object({
-  id: z.string().optional(),
-  productId: z.string(),
-  date: z.date().optional(),
-  dateScraped: z.date(),
-  verified: z.boolean(),
-  rating: z.number(),
-  content: z.string(),
-  title: z.string().optional(),
-  author: z.string().optional(),
-  helpful: z.number().optional()
-}) satisfies z.ZodType<Document>;
-
 // Types are inferred from the schemas
 export type Product = z.infer<typeof ProductSchema>;
 export type ProductList = z.infer<typeof ProductListSchema>;
-export type Review = z.infer<typeof ReviewSchema>;
 
 // Collection names for MongoDB
 const COLLECTIONS = {
   PRODUCTS: 'products',
-  PRODUCT_LISTS: 'product_lists',
-  REVIEWS: 'reviews'
+  PRODUCT_LISTS: 'product_lists'
 } as const;
 
 // Index definitions for MongoDB collections
@@ -98,10 +82,6 @@ const INDEXES = {
   ],
   [COLLECTIONS.PRODUCT_LISTS]: [
     { key: { category: 1 }, name: 'category_idx' } as IndexDefinition,
-    { key: { dateScraped: -1 }, name: 'dateScraped_idx' } as IndexDefinition
-  ],
-  [COLLECTIONS.REVIEWS]: [
-    { key: { productId: 1 }, name: 'productId_idx' } as IndexDefinition,
     { key: { dateScraped: -1 }, name: 'dateScraped_idx' } as IndexDefinition
   ]
 } as const;
@@ -318,13 +298,12 @@ async function scrapeProductList(page: Page, categoryUrl: string): Promise<Produ
 
   // Extract product data using Stagehand
   const data = await page.extract({
-    instruction: "Extract all product information from this Amazon category page, including product names, prices, URLs, ratings, and image URLs",
+    instruction: "Extract all product information from this Amazon category page, including product names, prices, URLs, ratings",
     schema: z.object({
       products: z.array(z.object({
         name: z.string(),
         price: z.string(),
         url: z.string(),
-        imageUrl: z.string().optional(),
         rating: z.number().optional(),
         reviewCount: z.number().optional(),
       })),
@@ -391,50 +370,6 @@ async function scrapeProductDetails(page: Page, productUrl: string): Promise<Pro
   await storeData(COLLECTIONS.PRODUCTS, completeProduct);
 
   return completeProduct;
-}
-
-/**
- * Scrapes product reviews
- */
-async function scrapeProductReviews(page: Page, productUrl: string): Promise<void> {
-  // Navigate to reviews page
-  const reviewsUrl = productUrl.includes('/dp/') 
-    ? productUrl.replace('/dp/', '/product-reviews/') 
-    : productUrl;
-  
-  await page.goto(reviewsUrl);
-  await page.waitForTimeout(2000);
-
-  // Extract review data using Stagehand
-  const data = await page.extract({
-    instruction: "Extract all product reviews from this Amazon reviews page, including review text, rating, author, title, date, and helpful count",
-    schema: z.object({
-      productId: z.string(),
-      reviews: z.array(z.object({
-        author: z.string().optional(),
-        rating: z.number(),
-        title: z.string().optional(),
-        content: z.string(),
-        date: z.string().optional(),
-        helpful: z.number().optional(),
-      })),
-    }),
-  });
-
-  // Process the review data
-  const reviews = data.reviews.map(review => ({
-    ...review,
-    productId: data.productId,
-    date: review.date ? new Date(review.date) : undefined,
-    dateScraped: new Date(),
-    verified: true,
-  }));
-
-  // Store reviews in MongoDB
-  if (reviews.length > 0) {
-    await storeData(COLLECTIONS.REVIEWS, reviews);
-    console.log(`Stored ${reviews.length} reviews for product ${data.productId}`);
-  }
 }
 
 // ========== Data Analysis Functions ==========
@@ -549,10 +484,6 @@ async function main({
         // Scrape product details
         const detailedProduct = await scrapeProductDetails(page, product.url);
         console.log(chalk.green(`✅ Scraped detailed information for: ${detailedProduct.name}`));
-        
-        // Scrape product reviews
-        console.log(chalk.blue(`📊 Scraping reviews for: ${detailedProduct.name}`));
-        await scrapeProductReviews(page, product.url);
         
         // Wait between requests to avoid rate limiting
         await page.waitForTimeout(2000);
